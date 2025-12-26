@@ -237,15 +237,96 @@ func sanitize(s string) string {
 	return strings.ReplaceAll(s, "-", "_")
 }
 
+// readTokenFromFile reads a token from a file path
+func readTokenFromFile(filePath string) (string, error) {
+	if filePath == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read token file %s: %v", filePath, err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// getToken retrieves the InfluxDB token from environment variable or file
+func getToken() (string, error) {
+	// First, try direct environment variable
+	token := os.Getenv("INFLUXDB_TOKEN")
+	if token != "" {
+		return strings.TrimSpace(token), nil
+	}
+
+	// Fall back to token file if environment variable is not set
+	tokenFile := os.Getenv("INFLUXDB_TOKEN_FILE")
+	if tokenFile != "" {
+		token, err := readTokenFromFile(tokenFile)
+		if err != nil {
+			return "", fmt.Errorf("failed to read token from file: %v", err)
+		}
+		if token == "" {
+			return "", fmt.Errorf("token file is empty")
+		}
+		return token, nil
+	}
+
+	return "", fmt.Errorf("neither INFLUXDB_TOKEN nor INFLUXDB_TOKEN_FILE is set")
+}
+
+// postDataToInfluxDB posts data to InfluxDB, supporting both 1.x and 2.x versions
 func postDataToInfluxDB(url, payload string) error {
-	resp, err := http.Post(url, "application/x-www-form-urlencoded", bytes.NewBufferString(payload))
+	// Check for InfluxDB 2.0+ environment variables
+	org := os.Getenv("INFLUXDB_ORG")
+	bucket := os.Getenv("INFLUXDB_BUCKET")
+
+	var req *http.Request
+	var err error
+
+	// If InfluxDB 2.0+ variables are set, use v2 API
+	if org != "" && bucket != "" {
+		token, err := getToken()
+		if err != nil {
+			return fmt.Errorf("failed to get token: %v", err)
+		}
+
+		// Construct InfluxDB 2.0 write URL
+		// Remove any existing path/query from base URL
+		baseURL := strings.TrimSuffix(url, "/")
+		if strings.Contains(baseURL, "/write") {
+			// Extract base URL (e.g., http://influxdb:8086 from http://influxdb:8086/write?db=home)
+			parts := strings.Split(baseURL, "/write")
+			baseURL = parts[0]
+		}
+		v2URL := fmt.Sprintf("%s/api/v2/write?org=%s&bucket=%s", baseURL, org, bucket)
+
+		req, err = http.NewRequest("POST", v2URL, bytes.NewBufferString(payload))
+		if err != nil {
+			return fmt.Errorf("failed to create request: %v", err)
+		}
+		req.Header.Set("Authorization", fmt.Sprintf("Token %s", token))
+		req.Header.Set("Content-Type", "text/plain; charset=utf-8")
+	} else {
+		// Use InfluxDB 1.x format (backward compatibility)
+		req, err = http.NewRequest("POST", url, bytes.NewBufferString(payload))
+		if err != nil {
+			return fmt.Errorf("failed to create request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("post error: %v", err)
 	}
 	defer resp.Body.Close()
 
+	// InfluxDB 2.0 returns 204 on success, 1.x also returns 204
 	if resp.StatusCode != 204 {
-		return fmt.Errorf("non-204 response: %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("non-204 response: %d, body: %s", resp.StatusCode, string(body))
 	}
 	return nil
 }

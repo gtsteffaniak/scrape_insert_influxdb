@@ -71,6 +71,8 @@ insert:
 
 #### Global Settings
 - `database_url` (required): Default InfluxDB write endpoint URL
+  - For InfluxDB 1.x: `http://localhost:9086/write?db=home`
+  - For InfluxDB 2.x: `http://localhost:9086` (base URL only, org/bucket set via env vars)
 
 #### Task Settings
 - `url`: HTTP endpoint to scrape (required for HTTP tasks)
@@ -80,6 +82,20 @@ insert:
 - `databaseUrl`: Override global database URL for this task (optional)
 - `dockerStats`: Enable Docker stats collection (set to `true` for Docker tasks)
 - `dockerEndpoint`: Docker daemon endpoint (default: `unix:///var/run/docker.sock`)
+
+#### InfluxDB 2.0+ Environment Variables
+
+When using InfluxDB 2.0 or later, set these environment variables for token-based authentication:
+
+- `INFLUXDB_TOKEN`: InfluxDB token as a direct environment variable (preferred)
+- `INFLUXDB_TOKEN_FILE`: Alternative - path to file containing the InfluxDB token (e.g., `/run/secrets/influxdb_token`)
+- `INFLUXDB_ORG`: Organization name (e.g., `home`)
+- `INFLUXDB_BUCKET`: Bucket name (e.g., `home`)
+
+**Note**: 
+- The application checks for `INFLUXDB_TOKEN` first, then falls back to `INFLUXDB_TOKEN_FILE` if the direct variable is not set.
+- If these environment variables are set, the application will automatically use the InfluxDB 2.0 API format (`/api/v2/write`) with token authentication.
+- If not set, it will use the InfluxDB 1.x format for backward compatibility.
 
 ### JSONPath Examples
 
@@ -137,6 +153,8 @@ docker run -v $(pwd)/config.yaml:/config.yaml:ro scrape-influxdb
 
 ### Docker Compose
 
+#### InfluxDB 1.x Example
+
 ```yaml
 services:
   scrape-influxdb:
@@ -146,6 +164,27 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
 ```
+
+#### InfluxDB 2.0+ Example
+
+```yaml
+services:
+  scrape-influxdb:
+    image: gtstef/scrape-insert-influxdb:latest
+    environment:
+      - DATABASE_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}  # or use INFLUXDB_TOKEN_FILE for file-based secrets
+      - INFLUXDB_ORG=home
+      - INFLUXDB_BUCKET=home
+    volumes:
+      - ./config.yaml:/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+    depends_on:
+      - influxdb
+```
+
+**Note**: You can set `INFLUXDB_TOKEN` directly in the environment section, or use `INFLUXDB_TOKEN_FILE` to read from a file (useful with Docker secrets). The application supports both methods.
 
 ## InfluxDB Data Format
 
